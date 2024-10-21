@@ -29,16 +29,28 @@ class ChatResponse(BaseModel):
 
 # Import Phidata classes
 from phi.agent import Agent, RunResponse
-from phi.model.ollama import Ollama
-from phi.embedder.ollama import OllamaEmbedder
 from phi.vectordb.lancedb import LanceDb
 from phi.tools.duckduckgo import DuckDuckGo
 from phi.tools.calculator import Calculator
 from phi.storage.agent.sqlite import SqlAgentStorage
 from phi.playground import Playground, serve_playground_app
 
+# Import tools from the new location
+from tools.calculator import EnhancedCalculator
+from tools.duckduckgo_search import EnhancedDuckDuckGo
+
+# Add this import instead:
+from models import get_model, get_embedder
+
 # Set up logging configuration
-logging.basicConfig(level=os.getenv('LOG_LEVEL', 'ERROR'), format='%(asctime)s - %(levelname)s - %(message)s')
+# To adjust logging level, set the LOG_LEVEL environment variable (e.g., export LOG_LEVEL=DEBUG)
+# Available levels: DEBUG, INFO, WARNING, ERROR, CRITICAL
+# DEBUG: Detailed information for diagnosing problems
+# INFO: Confirmation that things are working as expected
+# WARNING: Indication that something unexpected happened
+# ERROR: Serious problem that prevented a function from executing
+# CRITICAL: Serious error that may prevent the program from continuing
+logging.basicConfig(level=os.getenv('LOG_LEVEL', 'DEBUG'), format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Database configuration for session storage
@@ -46,33 +58,22 @@ DB_SESSION_STORAGE_FILE: str = os.getenv('DB_SESSION_STORAGE_FILE', 'agent_chat.
 VECTOR_DB_URI: str = os.getenv('VECTOR_DB_URI', '/tmp/lancedb')
 VECTOR_DB_TABLE_NAME: str = os.getenv('VECTOR_DB_TABLE_NAME', 'agent_chat_vectors')
 
-# Ollama configuration
-OLLAMA_HOST: str = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-
-# Llama model ID
-LLAMA_MODEL_ID: str = os.getenv('LLAMA_MODEL_ID', 'llama3.2')
-
-# Embedder model
-EMBEDDER_MODEL: str = os.getenv('EMBEDDER_MODEL', 'nomic-embed-text')
-
-# Add this import at the top of the file
-import inspect
-
 class AgentChat(Agent):
     """
     AgentChat integrates DuckDuckGo for search, Calculator for calculations,
     and Ollama with Llama 3.2 model for language model analysis.
     """
 
-    # Define tools and LLM with default factories
-    duckduckgo_tool: DuckDuckGo = Field(default_factory=DuckDuckGo)
-    calculator_tool: Calculator = Field(default_factory=Calculator)
-    llm: Ollama = Field(default_factory=lambda: Ollama(id=LLAMA_MODEL_ID))
+    # Define tools with default factories
+    duckduckgo_tool: EnhancedDuckDuckGo = Field(default_factory=EnhancedDuckDuckGo)
+    calculator_tool: EnhancedCalculator = Field(default_factory=EnhancedCalculator)
+    llm: Any = Field(default_factory=get_model)
+    embedder: Any = Field(default_factory=get_embedder)
 
     # Agent metadata
     name: str = "AgentChat"
     description: str = (
-        f"An advanced AI-powered agent using {LLAMA_MODEL_ID} model with reasoning capabilities and extensive knowledge."
+        "An advanced AI-powered agent with reasoning capabilities and extensive knowledge."
     )
     tools: List[Any] = Field(default_factory=list)
     markdown: bool = True
@@ -87,7 +88,6 @@ class AgentChat(Agent):
     conversation_history: List[Dict[str, str]] = Field(default_factory=list)
 
     # Embedder and Vector Store
-    embedder: Optional[OllamaEmbedder] = Field(default=None)
     vector_store: Optional[LanceDb] = Field(default=None)
 
     class Config:
@@ -98,15 +98,9 @@ class AgentChat(Agent):
         """
         Ensure that tools are properly set and initialize embedder and vector store after tools and LLM are initialized.
         """
-        logger.debug("Starting tool and component initialization")
+        logger.info("Initializing AgentChat tools and components")
         # Add tool instances to the tools list for easy access
         values.tools = [values.duckduckgo_tool, values.calculator_tool]
-
-        # Initialize the OllamaEmbedder for text embeddings
-        values.embedder = OllamaEmbedder(
-            model=EMBEDDER_MODEL,
-            host=OLLAMA_HOST,
-        )
 
         # Initialize LanceDb vector store for storing embeddings
         values.vector_store = LanceDb(
@@ -115,27 +109,16 @@ class AgentChat(Agent):
             embedder=values.embedder,
         )
 
-        # Ensure the LLM is using the correct model
-        values.llm.id = LLAMA_MODEL_ID
-
-        logger.debug("Tool and component initialization completed")
+        logger.debug("Embedder initialized")
+        logger.debug("LanceDb vector store initialized")
+        logger.info("AgentChat initialization completed")
         return values
 
     def run_tool(self, tool_name: str, *args, **kwargs):
         """
         Executes the specified tool with provided arguments.
-
-        Args:
-            tool_name (str): The name of the tool to execute.
-            *args: Positional arguments for the tool.
-            **kwargs: Keyword arguments for the tool.
-
-        Returns:
-            The result of the tool execution.
-
-        Raises:
-            ValueError: If the specified tool is not found.
         """
+        logger.info(f"Executing tool: {tool_name}")
         logger.debug(f"Starting tool execution: {tool_name}")
         try:
             result = None
@@ -146,7 +129,6 @@ class AgentChat(Agent):
                 method_name = tool_name.split('_')[1]  # This will be 'add', 'subtract', 'multiply', or 'divide'
                 calculator_method = getattr(self.calculator_tool, method_name)
                 result = calculator_method(*args, **kwargs)
-                return result
             else:
                 raise ValueError(f"Tool '{tool_name}' not found")
             logger.debug(f"Tool execution completed: {tool_name}")
@@ -162,57 +144,38 @@ class AgentChat(Agent):
         Args:
             num1 (float): The first number in the calculation.
             num2 (float): The second number in the calculation.
-            operator (str): The mathematical operator ('+', '-', '*', or '/').
+            operator (str): The mathematical operator ('+', '-', '*', '/', or 'x').
 
         Returns:
             A formatted string with the result of the calculation.
         """
-        operation_map = {
-            '+': ('addition', 'add'),
-            '-': ('subtraction', 'subtract'),
-            '*': ('multiplication', 'multiply'),
-            '/': ('division', 'divide')
-        }
-
-        if operator in operation_map:
-            operation_name, method_name = operation_map[operator]
-            tool_name = f"calculator_{method_name}"
-            result = self.run_tool(tool_name, num1, num2)
-        else:
-            return "Unsupported operation."
-
-        # Extract the numerical result and operation from the JSON response
-        if isinstance(result, dict):
-            numerical_result = result.get('result')
-            operation = result.get('operation', operation_name)
-        else:
-            numerical_result = result
-            operation = operation_name
-
-        # If numerical_result is still a JSON string, extract the result
-        if isinstance(numerical_result, str) and numerical_result.startswith('{'):
-            try:
-                result_dict = json.loads(numerical_result)
-                numerical_result = result_dict.get('result', numerical_result)
-            except json.JSONDecodeError:
-                pass  # If it's not valid JSON, keep the original value
-
-        return f"The result of the {operation} {num1} {operator} {num2} is {numerical_result}."
+        logger.info(f"Performing calculation: {num1} {operator} {num2}")
+        try:
+            result = self.calculator_tool.calculate(num1, num2, operator)
+            operation_name = {'+': 'addition', '-': 'subtraction', '*': 'multiplication', '/': 'division'}[operator]
+            logger.debug(f"Calculation result: {result}")
+            return f"The result of the {operation_name} {num1} {operator} {num2} is {result}."
+        except ValueError as e:
+            logger.error(f"Error during calculation: {str(e)}")
+            return f"Error: {str(e)}"
 
     def process_query(self, query: str, stream: bool = False) -> str:
-        logger.debug(f"Starting query processing: '{query}'")
+        logger.info(f"Processing query: '{query}'")
         try:
             calculation = self.extract_calculation_from_query(query)
             if calculation:
+                logger.debug("Query identified as a calculation")
                 num1, num2, operator = calculation
                 response = self.perform_calculation(num1, num2, operator)
             else:
-                # Use DuckDuckGo to search for information if not a calculation
+                logger.debug("Query requires search and analysis")
                 try:
-                    search_results = self.run_tool("duckduckgo_search", query, max_results=5)
+                    logger.info("Performing DuckDuckGo search")
+                    search_results = self.run_tool("duckduckgo_search", query)
+                    logger.debug("Summarizing search results")
                     search_summary = self.summarize_search_results(search_results)
 
-                    # Construct the prompt for the LLM to analyze the search results
+                    logger.info("Invoking LLM for analysis")
                     analysis_prompt = ChatMessage(
                         role="user",
                         content=f"""
@@ -223,6 +186,7 @@ class AgentChat(Agent):
         Answer:
         """
                     )
+                    logger.debug(f"LLM Prompt: {analysis_prompt.content}")
 
                     # Invoke the LLM to generate a response based on the prompt
                     final_answer = self.llm.invoke([analysis_prompt])
@@ -234,13 +198,15 @@ class AgentChat(Agent):
                         response = final_answer
                     else:
                         response = "An error occurred while generating the response."
-                except Exception as e:
-                    logger.error(f"Error during DuckDuckGo search: {e}", exc_info=True)
-                    response = f"An error occurred while searching with DuckDuckGo: {str(e)}"
 
-            # Update conversation history with the latest query and response
+                    logger.debug(f"LLM Response:\n{response}")
+                    logger.debug("LLM analysis completed")
+                except Exception as e:
+                    logger.error(f"Error during search and analysis: {e}", exc_info=True)
+                    response = f"An error occurred while processing your query: {str(e)}"
+
+            logger.info("Updating conversation history")
             self.conversation_history.append({'query': query, 'answer': response})
-            # Keep the last 5 exchanges to manage memory and prevent overflow
             self.conversation_history = self.conversation_history[-5:]
 
             return response
@@ -249,28 +215,32 @@ class AgentChat(Agent):
             return f"An error occurred while processing your query: {str(e)}"
 
     async def process_query_async(self, query: str, stream: bool = True) -> AsyncIterator[str]:
-        logger.debug(f"Starting asynchronous query processing: '{query}'")
+        logger.info(f"Processing asynchronous query: '{query}'")
         try:
             calculation = self.extract_calculation_from_query(query)
             if calculation:
+                logger.debug("Asynchronous query identified as a calculation")
                 num1, num2, operator = calculation
                 response = await asyncio.to_thread(self.perform_calculation, num1, num2, operator)
                 yield response
             else:
-                # Handle search requests asynchronously
-                search_results = await asyncio.to_thread(self.run_tool, "duckduckgo_search", query, max_results=5)
+                logger.debug("Asynchronous query requires search and analysis")
+                logger.info("Performing asynchronous DuckDuckGo search")
+                search_results = await asyncio.to_thread(self.run_tool, "duckduckgo_search", query)
 
                 if not search_results:
+                    logger.warning("No search results found")
                     yield "I couldn't find any relevant information for your query."
                     return
 
-                # Summarize search results to provide context to the LLM
+                logger.debug("Summarizing asynchronous search results")
                 search_summary = self.summarize_search_results(search_results)
                 if search_summary.startswith("Error:"):
+                    logger.error("Error in search summary")
                     yield search_summary
                     return
 
-                # Construct the LLM prompt for analysis
+                logger.info("Invoking LLM for asynchronous analysis")
                 analysis_prompt = ChatMessage(
                     role="user",
                     content=f"""
@@ -281,6 +251,7 @@ class AgentChat(Agent):
         Answer:
         """
                 )
+                logger.debug(f"LLM Prompt: {analysis_prompt.content}")
 
                 try:
                     # Invoke the LLM asynchronously to get a response
@@ -298,17 +269,18 @@ class AgentChat(Agent):
                             response = final_answer.get('content', '') if 'content' in final_answer else str(final_answer)
                     else:
                         response = "An error occurred while generating the response."
+
+                    logger.debug(f"LLM Response: {response}")
+                    logger.debug("Asynchronous LLM analysis completed")
                 except Exception as e:
                     logger.error(f"Error during LLM invocation: {str(e)}", exc_info=True)
                     response = f"An error occurred while generating the response: {str(e)}"
 
-                yield response
-
-            # Update conversation history with the response
+            logger.info("Updating conversation history for asynchronous query")
             self.conversation_history.append({'query': query, 'answer': response})
-            # Keep the last 5 exchanges to manage memory and prevent overflow
             self.conversation_history = self.conversation_history[-5:]
 
+            yield response
         except Exception as e:
             logger.error("Error during asynchronous query processing", exc_info=True)
             yield f"Error: An unexpected error occurred during processing. Details: {str(e)}"
@@ -343,9 +315,10 @@ class AgentChat(Agent):
         Returns:
             Optional[tuple]: A tuple of (num1, num2, operator) if found, else None.
         """
+        logger.debug(f"Extracting calculation from query: '{query}'")
         # Define patterns for different operations
         patterns = [
-            r"(\d+(?:\.\d+)?)\s*([\+\-\*/x])\s*(\d+(?:\.\d+)?)",  # Standard operators
+            r"(\d+(?:\.\d+)?)\s*([\+\-\*/x])\s*(\d+(?:\.\d+)?)",  # Standard operators including 'x'
             r"(\d+(?:\.\d+)?)\s*times\s*(\d+(?:\.\d+)?)",  # "times" for multiplication
             r"(\d+(?:\.\d+)?)\s*divided\s*by\s*(\d+(?:\.\d+)?)",  # "divided by" for division
             r"(\d+(?:\.\d+)?)\s*plus\s*(\d+(?:\.\d+)?)",  # "plus" for addition
@@ -357,6 +330,8 @@ class AgentChat(Agent):
             if match:
                 if len(match.groups()) == 3:
                     num1, operator, num2 = match.groups()
+                    if operator.lower() == 'x':
+                        operator = '*'  # Convert 'x' to '*' for multiplication
                 else:
                     num1, num2 = match.groups()
                     if "times" in match.group().lower():
@@ -367,8 +342,9 @@ class AgentChat(Agent):
                         operator = "+"
                     elif "minus" in match.group().lower():
                         operator = "-"
+                logger.debug(f"Calculation extracted: {float(num1)} {operator} {float(num2)}")
                 return float(num1), float(num2), operator
-
+        logger.debug("No calculation found in query")
         return None
 
     def summarize_search_results(self, search_results: List[Dict[str, Any]]) -> str:
@@ -381,6 +357,7 @@ class AgentChat(Agent):
         Returns:
             str: A summarized string of the search results.
         """
+        logger.debug("Summarizing search results")
         summary = ""
 
         # Check if search_results is a string (which might be a JSON string)
@@ -407,6 +384,7 @@ class AgentChat(Agent):
                 # Add each result to the summary
                 summary += f"- {title}: {snippet}\n"
 
+        logger.debug(f"Search summary created with {len(search_results)} results")
         return summary
 
 # Create the Playground instance with the AgentChat
@@ -427,10 +405,10 @@ app.add_middleware(
 
 # Entry point for running the application
 if __name__ == "__main__":
-    logger.debug("Launching AgentChat playground application")
+    logger.info("Launching AgentChat playground application")
     try:
-        # Start the FastAPI app with live reloading enabled
+        logger.info("Starting FastAPI app with live reloading")
         serve_playground_app("app:app", reload=True)
     except Exception as e:
-        logger.error("Error while serving playground app", exc_info=True)
+        logger.critical("Critical error while serving playground app", exc_info=True)
 

@@ -15,4 +15,6 @@ lxml-html-clean
 lancedb
 tantivy
 ollama
+phi-agent
+phi-model-ollama
 
