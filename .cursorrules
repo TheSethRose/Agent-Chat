@@ -1,0 +1,88 @@
+# Custom Cursor Rules for Phidata Agent running Llama-3.1-Nemotron-70B-Instruct
+
+# General Instructions
+general:
+  preserve_comments: true   # Preserve comments unless removal is explicitly requested
+  version_in_requirements: false   # Do not include specific versions in requirements.txt
+
+
+# Documentation for Imports
+import_statement_validation:
+  # Validate that current imports are correct as the documentation is incorrect
+  ensure_correct: true
+  feedback: "Current phidata documentation has incorrect imports; current imports are correct."
+  sources:
+    - "https://github.com/phidatahq/phidata"
+
+# Python Best Practices
+python_guidelines:
+  - Follow PEP 8 style guidelines
+  - Use type annotations for all functions
+  - Implement proper error handling using try-except blocks
+  - Use descriptive variable names reflecting the data or function description
+
+# Pydantic Model Rules
+pydantic:
+  - Ensure BaseModel usage and proper validation of data models
+
+# Phidata Usage
+phidata_guidelines:
+  # Validate correct implementation of phi modules
+  - Ensure correct integration with Phi's agent and model setup
+sources:
+  - "https://github.com/phidatahq/phidata"
+
+# Phidata Playground Integration
+playground_integration:
+  # Instructions for enabling additional functionality in the playground:
+  functionalities:
+    enable_knowledge_base:
+      - task: "Uncomment import for PDFUrlKnowledgeBase and LanceDb, SearchType"
+      - task: "Uncomment the knowledge_base initialization in the __init__ method"
+      - task: "Set `enable_rag` and `search_knowledge` to True in the Agent initialization"
+      - task: "Add `knowledge=knowledge_base` to the Agent initialization"
+      - task: "Install required packages: `pip install lancedb tantivy`"
+    integrate_database:
+      - task: "Create and implement `integrate_with_database` method"
+      - task: "Add necessary database connection logic and queries"
+      - task: "Install required database package (e.g., `pip install psycopg2-binary` for PostgreSQL)"
+    integrate_external_api:
+      - task: "Create and implement `integrate_with_api` method"
+      - task: "Use the requests library for API calls"
+      - task: "Install requests: `pip install requests`"
+    add_custom_tool:
+      - task: "Create `integrate_with_custom_tool` method"
+      - task: "Create a new tool class inheriting from `phi.tools.base.Tool`"
+      - task: "Add the tool to the tools list in Agent initialization"
+    sources:
+        - "https://github.com/phidatahq/phidata"
+
+# LLaMa 3.1 Model Usage
+model_specifics:
+  llama_usage:
+    - Model work is via API; validate API connections for compliance with NVIDIA LLaMa structure and usage benchmarks
+    - Ensure compatibility with NVIDIA NeMo framework deployment using prebuilt containers with required hardware and software setups
+    - Be aware of inference capabilities: up to 128k input tokens and generating up to 4k tokens
+    - Reference performance benchmarks (Arena Hard, AlpacaEval 2 LC) when optimizing or updating model configurations
+
+  # Reward Model Integration
+  reward_model_integration:
+    - Verify usage and effectiveness of the associated reward model (Llama-3.1-Nemotron-70B-Reward) for improving alignment with human preferences
+    - Ensure RLHF approach aligns with safe response rejection capabilities in the associated reward model (e.g., 94% or above on RewardBench)
+
+  # Interactive Components
+  interactive_usage:
+    - Utilize tools available in Phidata for interactive engagements and functionality expansion
+    - Leverage instructions based on Llama's strengths: reasoning, markdown formatting, structured outputs
+
+  source:
+    - "Source repository for Phidata: https://github.com/phidatahq/phidata"
+    - "Model information source: https://huggingface.co/nvidia/Llama-3.1-Nemotron-70B-Instruct-HF"
+    - "HelpSteer2-Preference dataset: https://huggingface.co/datasets/nvidia/HelpSteer2"
+    - "Reward model information: https://huggingface.co/nvidia/Llama-3.1-Nemotron-70B-Reward"
+    - "NVIDIA NeMo deployment guide: https://build.nvidia.com/nvidia/llama-3_1-nemotron-70b-instruct"
+
+# User Preferences
+user_preferences:
+  # Comments can only be changed with explicit permission from the user
+  comments_modification: false
