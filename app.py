@@ -236,7 +236,7 @@ class AgentChat(Agent):
                         response = "An error occurred while generating the response."
                 except Exception as e:
                     logger.error(f"Error during DuckDuckGo search: {e}", exc_info=True)
-                    response = "An error occurred while searching with DuckDuckGo."
+                    response = f"An error occurred while searching with DuckDuckGo: {str(e)}"
 
             # Update conversation history with the latest query and response
             self.conversation_history.append({'query': query, 'answer': response})
@@ -251,13 +251,10 @@ class AgentChat(Agent):
     async def process_query_async(self, query: str, stream: bool = True) -> AsyncIterator[str]:
         logger.debug(f"Starting asynchronous query processing: '{query}'")
         try:
-            if "calculate" in query.lower() or "what is" in query.lower():
-                calculation = self.extract_calculation_from_query(query)
-                if calculation:
-                    num1, num2, operator = calculation
-                    response = await asyncio.to_thread(self.perform_calculation, num1, num2, operator)
-                else:
-                    response = "I'm sorry, I couldn't understand the calculation."
+            calculation = self.extract_calculation_from_query(query)
+            if calculation:
+                num1, num2, operator = calculation
+                response = await asyncio.to_thread(self.perform_calculation, num1, num2, operator)
                 yield response
             else:
                 # Handle search requests asynchronously
