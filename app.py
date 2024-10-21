@@ -142,14 +142,11 @@ class AgentChat(Agent):
             # Select the correct tool based on the tool_name
             if tool_name.lower() == "duckduckgo_search":
                 result = self.duckduckgo_tool.duckduckgo_search(*args, **kwargs)
-            elif tool_name.lower() == "calculator_add":
-                result = self.calculator_tool.add(*args, **kwargs)
-            elif tool_name.lower() == "calculator_subtract":
-                result = self.calculator_tool.subtract(*args, **kwargs)
-            elif tool_name.lower() == "calculator_multiply":
-                result = self.calculator_tool.multiply(*args, **kwargs)
-            elif tool_name.lower() == "calculator_divide":
-                result = self.calculator_tool.divide(*args, **kwargs)
+            elif tool_name.lower().startswith("calculator_"):
+                method_name = tool_name.split('_')[1]  # This will be 'add', 'subtract', 'multiply', or 'divide'
+                calculator_method = getattr(self.calculator_tool, method_name)
+                result = calculator_method(*args, **kwargs)
+                return result
             else:
                 raise ValueError(f"Tool '{tool_name}' not found")
             logger.debug(f"Tool execution completed: {tool_name}")
@@ -158,39 +155,57 @@ class AgentChat(Agent):
             logger.error(f"Error during tool execution: {tool_name}", exc_info=True)
             raise
 
-    def process_query(self, query: str, stream: bool = False) -> str:
+    def perform_calculation(self, num1: float, num2: float, operator: str) -> str:
         """
-        Processes the user query by performing search, calculations, and analysis.
+        Performs a calculation based on the given numbers and operator.
 
         Args:
-            query (str): The user's input query.
-            stream (bool): Whether to stream the response (not used in this method).
+            num1 (float): The first number in the calculation.
+            num2 (float): The second number in the calculation.
+            operator (str): The mathematical operator ('+', '-', '*', or '/').
 
         Returns:
-            str: The processed response to the query.
+            A formatted string with the result of the calculation.
         """
+        operation_map = {
+            '+': ('addition', 'add'),
+            '-': ('subtraction', 'subtract'),
+            '*': ('multiplication', 'multiply'),
+            '/': ('division', 'divide')
+        }
+
+        if operator in operation_map:
+            operation_name, method_name = operation_map[operator]
+            tool_name = f"calculator_{method_name}"
+            result = self.run_tool(tool_name, num1, num2)
+        else:
+            return "Unsupported operation."
+
+        # Extract the numerical result and operation from the JSON response
+        if isinstance(result, dict):
+            numerical_result = result.get('result')
+            operation = result.get('operation', operation_name)
+        else:
+            numerical_result = result
+            operation = operation_name
+
+        # If numerical_result is still a JSON string, extract the result
+        if isinstance(numerical_result, str) and numerical_result.startswith('{'):
+            try:
+                result_dict = json.loads(numerical_result)
+                numerical_result = result_dict.get('result', numerical_result)
+            except json.JSONDecodeError:
+                pass  # If it's not valid JSON, keep the original value
+
+        return f"The result of the {operation} {num1} {operator} {num2} is {numerical_result}."
+
+    def process_query(self, query: str, stream: bool = False) -> str:
         logger.debug(f"Starting query processing: '{query}'")
         try:
-            # Check if the query is a calculation request
-            if "calculate" in query.lower() or "what is" in query.lower():
-                # Extract numbers and operation from the query
-                calculation = self.extract_calculation_from_query(query)
-                if calculation:
-                    # Perform the calculation based on the extracted operator
-                    num1, num2, operator = calculation
-                    if operator == '+':
-                        result = self.run_tool("calculator_add", num1, num2)
-                    elif operator == '-':
-                        result = self.run_tool("calculator_subtract", num1, num2)
-                    elif operator == '*':
-                        result = self.run_tool("calculator_multiply", num1, num2)
-                    elif operator == '/':
-                        result = self.run_tool("calculator_divide", num1, num2)
-                    else:
-                        result = "Unsupported operation."
-                    response = f"The result of your calculation is {result}."
-                else:
-                    response = "I'm sorry, I couldn't understand the calculation."
+            calculation = self.extract_calculation_from_query(query)
+            if calculation:
+                num1, num2, operator = calculation
+                response = self.perform_calculation(num1, num2, operator)
             else:
                 # Use DuckDuckGo to search for information if not a calculation
                 try:
@@ -231,39 +246,16 @@ class AgentChat(Agent):
             return response
         except Exception as e:
             logger.error("Error during query processing", exc_info=True)
-            return "An error occurred while processing your query."
+            return f"An error occurred while processing your query: {str(e)}"
 
     async def process_query_async(self, query: str, stream: bool = True) -> AsyncIterator[str]:
-        """
-        Asynchronously processes the user query by performing search, calculations, and analysis.
-        Yields response chunks for streaming.
-
-        Args:
-            query (str): The user's input query.
-            stream (bool): Whether to stream the response.
-
-        Yields:
-            str: Chunks of the processed response.
-        """
         logger.debug(f"Starting asynchronous query processing: '{query}'")
         try:
-            # Handle calculation requests
             if "calculate" in query.lower() or "what is" in query.lower():
                 calculation = self.extract_calculation_from_query(query)
                 if calculation:
                     num1, num2, operator = calculation
-                    # Perform calculation asynchronously
-                    if operator == '+':
-                        result = await asyncio.to_thread(self.run_tool, "calculator_add", num1, num2)
-                    elif operator == '-':
-                        result = await asyncio.to_thread(self.run_tool, "calculator_subtract", num1, num2)
-                    elif operator == '*':
-                        result = await asyncio.to_thread(self.run_tool, "calculator_multiply", num1, num2)
-                    elif operator == '/':
-                        result = await asyncio.to_thread(self.run_tool, "calculator_divide", num1, num2)
-                    else:
-                        result = "Unsupported operation."
-                    response = f"The result of your calculation is {result}."
+                    response = await asyncio.to_thread(self.perform_calculation, num1, num2, operator)
                 else:
                     response = "I'm sorry, I couldn't understand the calculation."
                 yield response
@@ -354,19 +346,33 @@ class AgentChat(Agent):
         Returns:
             Optional[tuple]: A tuple of (num1, num2, operator) if found, else None.
         """
-        # Regular expression to extract numbers and operator from a mathematical query
-        pattern = r"(\d+)\s*(\+|\-|\*|\/)\s*(\d+)"
-        match = re.search(pattern, query)
-        if match:
-            # Extract the first number
-            num1 = float(match.group(1))
-            # Extract the operator
-            operator = match.group(2)
-            # Extract the second number
-            num2 = float(match.group(3))
-            return num1, num2, operator
-        else:
-            return None
+        # Define patterns for different operations
+        patterns = [
+            r"(\d+(?:\.\d+)?)\s*([\+\-\*/x])\s*(\d+(?:\.\d+)?)",  # Standard operators
+            r"(\d+(?:\.\d+)?)\s*times\s*(\d+(?:\.\d+)?)",  # "times" for multiplication
+            r"(\d+(?:\.\d+)?)\s*divided\s*by\s*(\d+(?:\.\d+)?)",  # "divided by" for division
+            r"(\d+(?:\.\d+)?)\s*plus\s*(\d+(?:\.\d+)?)",  # "plus" for addition
+            r"(\d+(?:\.\d+)?)\s*minus\s*(\d+(?:\.\d+)?)"  # "minus" for subtraction
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, query, re.IGNORECASE)
+            if match:
+                if len(match.groups()) == 3:
+                    num1, operator, num2 = match.groups()
+                else:
+                    num1, num2 = match.groups()
+                    if "times" in match.group().lower():
+                        operator = "*"
+                    elif "divided by" in match.group().lower():
+                        operator = "/"
+                    elif "plus" in match.group().lower():
+                        operator = "+"
+                    elif "minus" in match.group().lower():
+                        operator = "-"
+                return float(num1), float(num2), operator
+
+        return None
 
     def summarize_search_results(self, search_results: List[Dict[str, Any]]) -> str:
         """
@@ -430,3 +436,4 @@ if __name__ == "__main__":
         serve_playground_app("app:app", reload=True)
     except Exception as e:
         logger.error("Error while serving playground app", exc_info=True)
+
